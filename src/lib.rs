@@ -646,3 +646,9 @@ mod with_op_tests {
         });
     }
 }
+
+// Rung 7 (contract): the README quick-start is a doctest, so a README example
+// that drifts from the real API fails `cargo test` instead of misleading users.
+#[cfg(doctest)]
+#[doc = include_str!("../README.md")]
+mod readme {}

@@ -1,5 +1,10 @@
 # Changelog
 
+## [0.2.2] - 2026-08-07
+
+- Crate `authors` set to `Santh <64453045+santhreal@users.noreply.github.com>`.
+
+
 All notable changes to this crate are documented here, following
 [Keep a Changelog](https://keepachangelog.com/) and semantic versioning.
 
@@ -25,6 +30,7 @@ All notable changes to this crate are documented here, following
 - `Error::SubscriberAlreadySet` now states what went wrong alongside the fix.
 - `with_op` documents that `op` must be a static label, never user-controlled
   data.
+- Updated package authors metadata in `Cargo.toml` to standard Santh project identity (`Santh <64453045+santhreal@users.noreply.github.com>`).
 
 ## 0.2.0
 
