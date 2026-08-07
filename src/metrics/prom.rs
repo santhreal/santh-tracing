@@ -371,8 +371,8 @@ mod tests {
             .next()
             .and_then(|v| v.parse().ok())
             .expect("counter line must end in a numeric value");
-        assert_eq!(
-            value, THREADS as f64,
+        assert!(
+            (value - THREADS as f64).abs() < f64::EPSILON,
             "all {THREADS} increments must land on the single registered counter, not a lost duplicate"
         );
     }
@@ -423,6 +423,9 @@ mod tests {
 
     #[test]
     fn invalid_label_metric_is_contained_not_corrupting() {
+        let _serial = crate::TOOL_SERIAL
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         // A hyphenated label KEY (label keys are not sanitized) makes
         // CounterVec::new fail. The construction failure must be contained: the
         // call is a safe no-op (metric not created/exported) and does NOT panic
@@ -452,7 +455,7 @@ mod tests {
             .next()
             .and_then(|v| v.parse().ok())
             .expect("counter line ends in a numeric value");
-        assert_eq!(value, 2.0, "both valid increments must land: {line}");
+        assert!((value - 2.0).abs() < f64::EPSILON, "both valid increments must land: {line}");
     }
 
     #[test]
@@ -518,7 +521,7 @@ mod tests {
             .filter_map(|l| l.rsplit(' ').next().and_then(|v| v.parse::<f64>().ok()))
             .sum();
         // 2 warm + 1000 loop increments all land on the cached vector(s).
-        assert_eq!(warm_total, 1002.0, "all warm increments must export:\n{buf}");
+        assert!((warm_total - 1002.0).abs() < f64::EPSILON, "all warm increments must export:\n{buf}");
     }
 
     #[test]

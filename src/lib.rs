@@ -263,17 +263,34 @@ impl InitConfig {
             Some(name) => EnvFilter::try_from_env(name),
             None => EnvFilter::try_from_default_env(),
         };
-        from_env.unwrap_or_else(|_| {
-            if let Some(directives) = &self.default_filter {
-                EnvFilter::new(directives.clone())
-            } else if self.deny_by_default {
-                // "off" disables every level; an empty filter would still
-                // admit ERROR (EnvFilter's default directive).
-                EnvFilter::new("off")
-            } else {
-                level_filter(self.level)
+        match &from_env {
+            Ok(filter) => filter.clone(),
+            Err(env_err) => {
+                let var_name = self.env_var.as_deref().unwrap_or("RUST_LOG");
+                if std::env::var(var_name).is_ok() {
+                    eprintln!(
+                        "santh-tracing: invalid filter in {var_name}: {env_err}; falling back to default configuration"
+                    );
+                }
+                if let Some(directives) = &self.default_filter {
+                    match EnvFilter::try_new(directives) {
+                        Ok(filter) => filter,
+                        Err(parse_err) => {
+                            eprintln!(
+                                "santh-tracing: invalid default_filter directive '{directives}': {parse_err}; falling back to level filter"
+                            );
+                            level_filter(self.level)
+                        }
+                    }
+                } else if self.deny_by_default {
+                    // "off" disables every level; an empty filter would still
+                    // admit ERROR (EnvFilter's default directive).
+                    EnvFilter::new("off")
+                } else {
+                    level_filter(self.level)
+                }
             }
-        })
+        }
     }
 
     /// Build the boxed fmt layer for the selected format, time, and writer.
@@ -331,10 +348,16 @@ impl InitConfig {
                 ),
                 // file_sink() validated openability; if it has since become
                 // unopenable, fall back loudly to stderr rather than panic.
-                Err(_) => (
-                    BoxMakeWriter::new(Mutex::new(RedactingWriter::new(std::io::stderr()))),
-                    true,
-                ),
+                Err(err) => {
+                    eprintln!(
+                        "santh-tracing: failed to open log file {}: {err}; falling back to stderr",
+                        path.display()
+                    );
+                    (
+                        BoxMakeWriter::new(Mutex::new(RedactingWriter::new(std::io::stderr()))),
+                        true,
+                    )
+                }
             },
             None => (
                 BoxMakeWriter::new(Mutex::new(RedactingWriter::new(std::io::stderr()))),
@@ -569,6 +592,17 @@ mod build_filter_tests {
             filter.to_string(),
             EnvFilter::new("off").to_string(),
             "deny_by_default must silence (off) on malformed env, not fall back to the level"
+        );
+    }
+    #[test]
+    fn invalid_default_filter_directive_falls_back_to_level_without_panic() {
+        let filter = InitConfig::new("probe", LogLevel::Warn)
+            .default_filter("invalid=notalevel=foo")
+            .build_filter();
+        assert_eq!(
+            filter.to_string(),
+            level_filter(LogLevel::Warn).to_string(),
+            "invalid default_filter must fall back to level filter instead of panicking"
         );
     }
 }
