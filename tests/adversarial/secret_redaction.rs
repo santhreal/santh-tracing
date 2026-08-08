@@ -144,3 +144,77 @@ fn long_single_line_pem_is_redacted_across_forced_flushes() {
         "PEM block must be replaced with the redaction marker: {rendered}"
     );
 }
+#[test]
+fn multiline_pem_key_streamed_across_multiple_writes_is_redacted() {
+    // Proving test: streaming a multi-line PEM key line-by-line across multiple
+    // `write_all` calls (under the 1MB MAX_PENDING cap) must immediately engage
+    // stateful redaction on the opener, preventing `forward_complete_lines` from
+    // emitting key lines in the clear before the closer arrives.
+    let mut output = Vec::new();
+    {
+        let mut writer = RedactingWriter::new(&mut output);
+        writer
+            .write_all(b"Header info line\n")
+            .expect("must accept header");
+        writer
+            .write_all(b"-----BEGIN RSA PRIVATE KEY-----\n")
+            .expect("must accept opener");
+        writer
+            .write_all(b"MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQC...\n")
+            .expect("must accept key body line 1");
+        writer
+            .write_all(b"ZZsecret_rsa_payload_bytes_hereZZ\n")
+            .expect("must accept key body line 2");
+        writer
+            .write_all(b"-----END RSA PRIVATE KEY-----\n")
+            .expect("must accept closer");
+        writer
+            .write_all(b"Footer status line\n")
+            .expect("must accept footer");
+        writer.flush().expect("must flush");
+    }
+
+    let rendered = String::from_utf8(output).expect("output must remain UTF-8");
+    assert!(
+        rendered.contains("Header info line"),
+        "Header before PEM opener must be preserved: {rendered}"
+    );
+    assert!(
+        !rendered.contains("MIIEvgIBADANBgkqhkiG9w0")
+            && !rendered.contains("secret_rsa_payload_bytes_here"),
+        "PEM key body lines streamed across writes must not leak: {rendered}"
+    );
+    assert!(
+        rendered.contains("[REDACTED]"),
+        "Streamed PEM key block must be replaced with redaction marker: {rendered}"
+    );
+    assert!(
+        rendered.contains("Footer status line"),
+        "Footer after PEM closer must be preserved: {rendered}"
+    );
+}
+
+#[test]
+fn trailing_text_after_pem_closer_on_flush_is_preserved_and_flushed() {
+    // Proving test: calling `flush()` on a buffer containing a PEM secret
+    // followed by trailing text must redact the secret AND flush the trailing text,
+    // rather than dropping or leaving the trailing text unflushed in pending.
+    let mut output = Vec::new();
+    {
+        let mut writer = RedactingWriter::new(&mut output);
+        writer
+            .write_all(b"-----BEGIN PRIVATE KEY-----\nsecret_bytes\n-----END PRIVATE KEY----- trailing_log_data")
+            .expect("must accept PEM and trailing text");
+        writer.flush().expect("must flush");
+    }
+
+    let rendered = String::from_utf8_lossy(&output);
+    assert!(
+        rendered.contains("[REDACTED]"),
+        "PEM secret must be redacted on flush: {rendered}"
+    );
+    assert!(
+        rendered.contains("trailing_log_data"),
+        "Trailing text after PEM closer must be flushed completely to output: {rendered}"
+    );
+}

@@ -312,21 +312,30 @@ fn get_or_create_gauge(name: &str, labels: &[(&str, &str)]) -> Option<GaugeVec> 
 /// Metrics are automatically namespaced under `santh_<tool_name>_<name>`.
 pub fn counter(name: &str, labels: &[(&str, &str)]) {
     if let Some(MetricVec::Counter(vec)) = resolve(Kind::Counter, name, labels) {
-        with_label_values(labels, |values| vec.with_label_values(values).inc());
+        with_label_values(labels, |values| match vec.get_metric_with_label_values(values) {
+            Ok(metric) => metric.inc(),
+            Err(e) => tracing::warn!(metric = %name, error = %e, "failed to get counter metric with label values"),
+        });
     }
 }
 
 /// Record a histogram observation.
 pub fn histogram(name: &str, value: f64, labels: &[(&str, &str)]) {
     if let Some(MetricVec::Histogram(vec)) = resolve(Kind::Histogram, name, labels) {
-        with_label_values(labels, |values| vec.with_label_values(values).observe(value));
+        with_label_values(labels, |values| match vec.get_metric_with_label_values(values) {
+            Ok(metric) => metric.observe(value),
+            Err(e) => tracing::warn!(metric = %name, error = %e, "failed to get histogram metric with label values"),
+        });
     }
 }
 
 /// Set a gauge value.
 pub fn gauge(name: &str, value: f64, labels: &[(&str, &str)]) {
     if let Some(MetricVec::Gauge(vec)) = resolve(Kind::Gauge, name, labels) {
-        with_label_values(labels, |values| vec.with_label_values(values).set(value));
+        with_label_values(labels, |values| match vec.get_metric_with_label_values(values) {
+            Ok(metric) => metric.set(value),
+            Err(e) => tracing::warn!(metric = %name, error = %e, "failed to get gauge metric with label values"),
+        });
     }
 }
 

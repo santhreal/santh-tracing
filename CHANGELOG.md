@@ -1,13 +1,13 @@
 # Changelog
 
-## [0.2.3] - 2026-08-07
-
+## [0.2.4] - 2026-08-07
 ### Fixed
+- Fixed silent fallback and potential data loss in `RedactingWriter` when multi-line PEM keys are written across multiple `write_all` calls or flushed with trailing text.
+- Fixed potential process panics in Prometheus metrics facade (`counter`, `histogram`, `gauge`) when encountering invalid metric label values or mismatched label counts by gracefully logging warnings via `tracing::warn!`.
 - Fixed silent fallback when `file_sink` file path cannot be opened during `InitConfig::install()`; now emits a warning to stderr before falling back to stderr.
 - Fixed silent fallback when an environment filter variable (`RUST_LOG` or custom `env_var`) contains invalid directives; now emits a warning naming the variable and parse error.
 - Fixed potential panic in `InitConfig::build_filter()` when an invalid directive is passed to `default_filter()`; now gracefully falls back to level filter with a warning.
 - Fixed test thread serialization in `invalid_label_metric_is_contained_not_corrupting` by acquiring `TOOL_SERIAL` lock.
-
 ## [0.2.2] - 2026-08-07
 
 - Crate `authors` set to `Santh <64453045+santhreal@users.noreply.github.com>`.

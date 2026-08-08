@@ -92,13 +92,42 @@ impl<W: Write> RedactingWriter<W> {
         }
     }
 
-    /// Redact and forward every complete (newline-terminated) line currently
-    /// buffered, leaving any trailing partial line pending.
-    ///
-    /// The whole block of complete lines (up to and including the last newline)
-    /// is drained and redacted in a single pass. Draining line-by-line from the
-    /// front was O(N^2) (each `drain(..=i)` shifts all trailing bytes left); a
-    /// single drain of the block is O(N). Redacting the block as one string is
+    /// Scan `pending` for PEM markers and redact complete `BEGIN...END` blocks
+    /// or update `secret_start` if an unclosed `BEGIN` marker is present.
+    fn process_pem_secrets(&mut self) -> io::Result<()> {
+        while !self.pending.is_empty() {
+            let start = match self.secret_start {
+                Some(s) => s,
+                None => {
+                    let text = String::from_utf8_lossy(&self.pending);
+                    let Some(m) = find_marker(&text, &PEM_BEGIN_MARKERS) else {
+                        break;
+                    };
+                    m.start
+                }
+            };
+            let text = String::from_utf8_lossy(&self.pending);
+            if let Some(end_match) = find_marker(&text[start..], &PEM_END_MARKERS) {
+                let end_abs = start + end_match.end;
+                let prefix: Vec<u8> = self.pending.drain(..start).collect();
+                if !prefix.is_empty() {
+                    let redacted = redact_secrets(&String::from_utf8_lossy(&prefix));
+                    self.inner.write_all(redacted.as_bytes())?;
+                }
+                self.inner.write_all(REDACTED.as_bytes())?;
+                let _ = self.pending.drain(..(end_abs - start));
+                self.secret_start = None;
+            } else {
+                self.secret_start = Some(start);
+                break;
+            }
+        }
+        Ok(())
+    }
+
+    fn detect_secret_start(&mut self) {
+        let _ = self.process_pem_secrets();
+    }
     /// also strictly safer than the old per-line redaction: a multi-line secret
     /// (e.g. a PEM `BEGIN...END PRIVATE KEY` block) that per-line scanning could
     /// not match is redacted when it lies within the forwarded block, and no
@@ -109,6 +138,8 @@ impl<W: Write> RedactingWriter<W> {
     /// bytes are held until the matching closer is seen. A newline inside such
     /// a secret does not cause a premature split.
     fn forward_complete_lines(&mut self) -> io::Result<()> {
+        self.detect_secret_start();
+
         let Some(last_newline) = self.pending.iter().rposition(|&b| b == b'\n') else {
             return Ok(());
         };
@@ -118,6 +149,16 @@ impl<W: Write> RedactingWriter<W> {
         // the buffer-bound path to flush the whole region as redacted.
         if let Some(start) = self.secret_start {
             if start <= last_newline {
+                let prefix_bytes = &self.pending[..start];
+                if let Some(prefix_last_newline) = prefix_bytes.iter().rposition(|&b| b == b'\n') {
+                    let block_len = prefix_last_newline + 1;
+                    let block: Vec<u8> = self.pending.drain(..block_len).collect();
+                    if let Some(s) = &mut self.secret_start {
+                        *s = s.saturating_sub(block_len);
+                    }
+                    let redacted = redact_secrets(&String::from_utf8_lossy(&block));
+                    self.inner.write_all(redacted.as_bytes())?;
+                }
                 return Ok(());
             }
         }
@@ -132,7 +173,6 @@ impl<W: Write> RedactingWriter<W> {
         let redacted = redact_secrets(&String::from_utf8_lossy(&block));
         self.inner.write_all(redacted.as_bytes())
     }
-
     /// Bound the pending buffer so a newline-less stream cannot grow it without
     /// limit. When `pending` exceeds [`MAX_PENDING`], its head is redacted and
     /// forwarded, retaining only an [`OVERLAP`] tail.
@@ -232,29 +272,33 @@ impl<W: Write> Write for RedactingWriter<W> {
     }
 
     fn flush(&mut self) -> io::Result<()> {
-        if !self.pending.is_empty() {
+        self.process_pem_secrets()?;
+        while !self.pending.is_empty() {
             if let Some(start) = self.secret_start {
                 let text = String::from_utf8_lossy(&self.pending);
                 if let Some(end_match) = find_marker(&text[start..], &PEM_END_MARKERS) {
-                    // Closer is in the remaining buffer. Redact only the secret
-                    // region; anything after the closer stays pending.
                     let end_abs = start + end_match.end;
                     let prefix: Vec<u8> = self.pending.drain(..start).collect();
-                    self.inner.write_all(redact_secrets(&String::from_utf8_lossy(&prefix)).as_bytes())?;
+                    if !prefix.is_empty() {
+                        let redacted = redact_secrets(&String::from_utf8_lossy(&prefix));
+                        self.inner.write_all(redacted.as_bytes())?;
+                    }
                     self.inner.write_all(REDACTED.as_bytes())?;
                     let _ = self.pending.drain(..(end_abs - start));
+                    self.secret_start = None;
                 } else {
-                    // Flush while still inside a secret: redact everything from
-                    // the opener onward. The prefix before the opener is still
-                    // normally redacted.
                     let prefix: Vec<u8> = self.pending.drain(..start).collect();
-                    self.inner.write_all(redact_secrets(&String::from_utf8_lossy(&prefix)).as_bytes())?;
+                    if !prefix.is_empty() {
+                        let redacted = redact_secrets(&String::from_utf8_lossy(&prefix));
+                        self.inner.write_all(redacted.as_bytes())?;
+                    }
                     self.inner.write_all(REDACTED.as_bytes())?;
                     self.pending.clear();
+                    self.secret_start = None;
                 }
-                self.secret_start = None;
             } else {
-                let redacted = redact_secrets(&String::from_utf8_lossy(&self.pending));
+                let text = String::from_utf8_lossy(&self.pending);
+                let redacted = redact_secrets(&text);
                 self.inner.write_all(redacted.as_bytes())?;
                 self.pending.clear();
             }
